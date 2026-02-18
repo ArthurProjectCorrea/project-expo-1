@@ -1,0 +1,9 @@
+# Ignore artifacts:
+node_modules
+.expo
+/dist
+/build
+.web-build
+.vscode
+/*.min.js
+*.map
