@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Stack, useRouter } from 'expo-router';
-import { View, Alert } from 'react-native';
+import { View, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
 import { useAuth } from '@/context/AuthContext';
@@ -38,6 +38,12 @@ export default function DashboardScreen() {
   const [scannerVisible, setScannerVisible] = React.useState(false);
   const [scanned, setScanned] = React.useState(false);
   const cameraRef = React.useRef<any>(null);
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+
+  // OpenFoodFacts result
+  const [productData, setProductData] = React.useState<any | null>(null);
+  const [productLoading, setProductLoading] = React.useState(false);
+  const [productError, setProductError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!loading && (!user || !user.email_confirmed_at)) {
@@ -70,6 +76,51 @@ export default function DashboardScreen() {
     setScannerVisible(true);
   }
 
+  async function lookupOpenFoodFacts(barcode: string) {
+    // show dialog immediately and start loading
+    setDialogTitle('Buscando produto');
+    setDialogDescription(`Consultando Open Food Facts para ${barcode}...`);
+    setProductLoading(true);
+    setProductError(null);
+    setProductData(null);
+    setDialogOpen(true);
+
+    // setup abort controller so we can cancel
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    try {
+      const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
+        signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+
+      if (json?.status === 1) {
+        setProductData(json);
+        setDialogTitle('Produto encontrado');
+        setDialogDescription(`Código: ${barcode}`);
+      } else {
+        setProductError('Produto não encontrado no Open Food Facts');
+        setDialogTitle('Produto não encontrado');
+        setDialogDescription(`Código: ${barcode}`);
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        setProductError('Consulta cancelada pelo usuário');
+        setDialogTitle('Consulta cancelada');
+        setDialogDescription('Você cancelou a pesquisa.');
+      } else {
+        setProductError(err?.message ?? String(err));
+        setDialogTitle('Erro ao consultar API');
+        setDialogDescription(String(err?.message ?? err));
+      }
+    } finally {
+      setProductLoading(false);
+      abortControllerRef.current = null;
+    }
+  }
+
   function handleBarcodeScanned(event: any) {
     // prevenir chamadas duplicadas
     if (scanned) return;
@@ -79,15 +130,16 @@ export default function DashboardScreen() {
 
     setScannerVisible(false);
 
-    if (data) {
-      setDialogTitle('Código escaneado');
-      setDialogDescription(String(data));
-    } else {
+    if (!data) {
       setDialogTitle('Leitura falhou');
       setDialogDescription('Não foi possível extrair o código do leitor.');
+      setDialogOpen(true);
+      setTimeout(() => setScanned(false), 1000);
+      return;
     }
 
-    setDialogOpen(true);
+    // mostrar imediatamente diálogo com spinner e consultar Open Food Facts
+    void lookupOpenFoodFacts(String(data));
 
     // resetar flag depois de curto período (segurança)
     setTimeout(() => setScanned(false), 1000);
@@ -104,11 +156,11 @@ export default function DashboardScreen() {
         <Text className="text-sm text-muted-foreground">{user?.email}</Text>
 
         {/* botão padrão (visível) para testes */}
-        <Button onPress={openScanner} variant="secondary">
+        <Button onPress={openScanner} variant="secondary" disabled={productLoading}>
           <Text>Abrir scanner</Text>
         </Button>
 
-        <Button onPress={handleSignOut} variant="outline">
+        <Button onPress={handleSignOut} variant="outline" disabled={productLoading}>
           <Text>Sign out</Text>
         </Button>
 
@@ -117,7 +169,8 @@ export default function DashboardScreen() {
           onPress={openScanner}
           size="icon"
           className="absolute bottom-8 right-6 z-50"
-          aria-label="Abrir scanner de código">
+          aria-label="Abrir scanner de código"
+          disabled={productLoading}>
           <Icon as={CameraIcon} className="text-primary-foreground" size={18} />
         </Button>
       </View>
@@ -126,7 +179,9 @@ export default function DashboardScreen() {
       {scannerVisible && (
         <View className="absolute inset-0 z-50 bg-black">
           <CameraView
-            ref={(r) => (cameraRef.current = r)}
+            ref={(r) => {
+              cameraRef.current = r;
+            }}
             style={{ flex: 1 }}
             onBarcodeScanned={handleBarcodeScanned}
           />
@@ -145,17 +200,72 @@ export default function DashboardScreen() {
       )}
 
       {/* AlertDialog para mostrar sucesso / erro */}
-      <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <AlertDialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) {
+            setProductData(null);
+            setProductError(null);
+            setDialogDescription('');
+            setDialogTitle('');
+          }
+        }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{dialogTitle}</AlertDialogTitle>
             <AlertDialogDescription>{dialogDescription}</AlertDialogDescription>
           </AlertDialogHeader>
+
+          {/* corpo do diálogo: loading / erro / json */}
+          {productLoading && (
+            <View className="items-center gap-4 p-4">
+              <ActivityIndicator size="large" color="#2563EB" />
+              <Text>Buscando dados no Open Food Facts…</Text>
+            </View>
+          )}
+
+          {productError && (
+            <View className="p-4">
+              <Text className="text-destructive">{productError}</Text>
+            </View>
+          )}
+
+          {productData && (
+            <View className="p-2">
+              <ScrollView style={{ maxHeight: 340 }}>
+                <Text variant="code">{JSON.stringify(productData, null, 2)}</Text>
+              </ScrollView>
+            </View>
+          )}
+
           <AlertDialogFooter>
-            <AlertDialogCancel onPress={() => setDialogOpen(false)}>
+            {productLoading ? (
+              // enquanto consulta estiver ativa mostramos botão para cancelar
+              <Button
+                variant="destructive"
+                onPress={() => {
+                  // abortar fetch em andamento
+                  if (abortControllerRef.current) abortControllerRef.current.abort();
+                }}>
+                <Text>Cancelar consulta</Text>
+              </Button>
+            ) : null}
+
+            <AlertDialogCancel
+              onPress={() => {
+                // não permitir fechar enquanto está carregando
+                if (productLoading) return;
+                setDialogOpen(false);
+              }}>
               <Text>Fechar</Text>
             </AlertDialogCancel>
-            <AlertDialogAction onPress={() => setDialogOpen(false)}>
+
+            <AlertDialogAction
+              onPress={() => {
+                if (productLoading) return;
+                setDialogOpen(false);
+              }}>
               <Text>OK</Text>
             </AlertDialogAction>
           </AlertDialogFooter>
