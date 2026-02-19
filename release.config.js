@@ -15,6 +15,13 @@ module.exports = {
         npmPublish: false,
       },
     ],
+    // update app.json version so it is committed with the release
+    [
+      '@semantic-release/exec',
+      {
+        prepareCmd: 'node ./scripts/update-app-json.mjs ${nextRelease.version}',
+      },
+    ],
     [
       '@semantic-release/git',
       {

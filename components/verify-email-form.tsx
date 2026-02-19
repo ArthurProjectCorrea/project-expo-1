@@ -34,7 +34,7 @@ export function VerifyEmailForm({
     setLoading(true);
     try {
       if (purpose === 'recovery') {
-        const { data, error } = await verifyOtp(email, code, 'recovery');
+        const { error } = await verifyOtp(email, code, 'recovery');
         if (error) {
           Alert.alert('Código inválido', error.message);
           return;

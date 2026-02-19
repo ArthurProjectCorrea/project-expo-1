@@ -49,6 +49,28 @@ function updatePackageJson(newName, newVersion = '0.0.0') {
   console.log('✓ package.json atualizado: name = "%s", version = "%s"', newName, newVersion);
 }
 
+function updateAppJson(newName, newVersion = '0.0.0') {
+  const appJsonPath = path.join(root, 'app.json');
+  if (!fs.existsSync(appJsonPath)) {
+    console.log('○ app.json não encontrado; pulando atualização de app.json');
+    return;
+  }
+
+  try {
+    const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+    if (!appJson.expo) appJson.expo = {};
+
+    // Atualiza apenas os campos solicitados: name e version
+    appJson.expo.name = newName;
+    appJson.expo.version = newVersion;
+
+    fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2) + '\n', 'utf8');
+    console.log('✓ app.json atualizado: expo.name = "%s", expo.version = "%s"', newName, newVersion);
+  } catch (err) {
+    console.warn('⚠️ Falha ao atualizar app.json:', err?.message ?? err);
+  }
+}
+
 function removeChangelog() {
   const changelogPath = path.join(root, 'CHANGELOG.md');
   if (fs.existsSync(changelogPath)) {
@@ -82,8 +104,9 @@ console.log('\n🔧 Primeiros passos do template\n');
 const repoName = getRepoName();
 if (repoName) {
   updatePackageJson(repoName, '0.0.0');
+  updateAppJson(repoName, '0.0.0');
 } else {
-  console.log('○ Pulando alteração do package.json. Defina "name" e "version" manualmente.');
+  console.log('○ Pulando alteração do package.json e app.json. Defina "name" e "version" manualmente.');
 }
 
 removeChangelog();

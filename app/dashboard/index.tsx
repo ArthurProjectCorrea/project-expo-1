@@ -1,14 +1,23 @@
 import * as React from 'react';
 import { Stack, useRouter } from 'expo-router';
-import { View, Alert, ScrollView, ActivityIndicator, Image } from 'react-native';
+import {
+  View,
+  Alert,
+  ScrollView,
+  ActivityIndicator,
+  Image,
+  Platform,
+  Pressable,
+} from 'react-native';
 import { Button } from '@/components/ui/button';
 import { Text } from '@/components/ui/text';
+import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { addUserInventory } from '@/lib/userInventory';
 
 // expo-camera (usando docs em docs/expo/camera.md)
-import { CameraView } from 'expo-camera';
-import { useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 // ícones
 import { Camera as CameraIcon, X as XIcon } from 'lucide-react-native';
@@ -45,6 +54,36 @@ export default function DashboardScreen() {
   const [productData, setProductData] = React.useState<any | null>(null);
   const [productLoading, setProductLoading] = React.useState(false);
   const [productError, setProductError] = React.useState<string | null>(null);
+
+  // inventory inputs (quantidade + validade) shown when productData is available
+  const [invQuantity, setInvQuantity] = React.useState<string>('1');
+  const [invExpiration, setInvExpiration] = React.useState<string>('');
+  const [addingToInventory, setAddingToInventory] = React.useState<boolean>(false);
+  const [inventoryMessage, setInventoryMessage] = React.useState<string | null>(null);
+  const [showDatePicker, setShowDatePicker] = React.useState<boolean>(false);
+  const [DateTimePickerComponent, setDateTimePickerComponent] = React.useState<any>(null);
+
+  function formatDateToYMD(d: Date) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  React.useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let mounted = true;
+    import('@react-native-community/datetimepicker')
+      .then((mod) => {
+        if (mounted) setDateTimePickerComponent(() => mod.default ?? mod);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!loading && (!user || !user.email_confirmed_at)) {
@@ -360,6 +399,64 @@ export default function DashboardScreen() {
     setTimeout(() => setScanned(false), 1000);
   }
 
+  // adiciona produto ao estoque do usuário (usa helper em lib/userInventory.ts)
+  async function handleAddToInventory() {
+    if (!productData) return;
+    if (!user?.id) {
+      setInventoryMessage('Usuário não autenticado.');
+      return;
+    }
+
+    setAddingToInventory(true);
+    setInventoryMessage(null);
+
+    try {
+      // tentar obter product_id a partir do objeto retornado
+      let productId: string | undefined = productData?.raw?.id ?? productData?.raw?.product_id;
+
+      if (!productId) {
+        const barcode =
+          productData?.raw?.barcode ??
+          productData?.raw?.gtin ??
+          productData?.barcode ??
+          productData?.raw?.raw?.barcode;
+        if (barcode) {
+          const { data: prod, error: prodErr } = await supabase
+            .from('products')
+            .select('id')
+            .eq('barcode', String(barcode))
+            .maybeSingle();
+          if (prodErr) throw prodErr;
+          productId = prod?.id;
+        }
+      }
+
+      if (!productId) throw new Error('ID do produto não encontrado no banco.');
+
+      const qty = Math.max(1, Number(invQuantity) || 1);
+
+      await addUserInventory({
+        userId: user.id,
+        productId,
+        quantity: qty,
+        expirationDate: invExpiration || null,
+      });
+
+      setInventoryMessage('Produto adicionado ao estoque com sucesso.');
+      setDialogTitle('Adicionado ao estoque');
+      setDialogDescription('Registro criado. Verifique a tabela `user_inventory`.');
+      setProductData(null);
+      setTimeout(() => setDialogOpen(false), 900);
+    } catch (err: any) {
+      console.warn('Erro ao adicionar ao estoque', err);
+      setInventoryMessage(err?.message ?? String(err));
+      setDialogTitle('Erro ao adicionar');
+      setDialogDescription(err?.message ?? String(err));
+    } finally {
+      setAddingToInventory(false);
+    }
+  }
+
   if (loading) return null;
 
   return (
@@ -487,10 +584,83 @@ export default function DashboardScreen() {
                 </View>
               </View>
 
-              <View className="mt-3">
-                <ScrollView style={{ maxHeight: 220 }}>
-                  <Text variant="code">{JSON.stringify(productData, null, 2)}</Text>
-                </ScrollView>
+              <View className="mt-3 space-y-2">
+                <Text className="mb-1 text-sm font-medium">Quantidade</Text>
+                <Input keyboardType="numeric" value={invQuantity} onChangeText={setInvQuantity} />
+
+                <Text className="mb-1 mt-2 text-sm font-medium">Data de validade</Text>
+
+                {Platform.OS === 'web' ? (
+                  // web: native input[type=date]
+                  <input
+                    type="date"
+                    className="flex h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 py-1 text-base leading-5 text-foreground shadow-sm"
+                    value={invExpiration}
+                    onChange={(e: any) => setInvExpiration(e.target.value)}
+                  />
+                ) : (
+                  // native: open platform DateTimePicker (requires dependency)
+                  <>
+                    <Pressable
+                      onPress={async () => {
+                        // Android: use DateTimePickerAndroid.open to avoid dialog lifecycle bugs
+                        if (Platform.OS === 'android') {
+                          try {
+                            const mod = await import('@react-native-community/datetimepicker');
+                            const DateTimePickerAndroid = mod?.DateTimePickerAndroid;
+                            if (
+                              DateTimePickerAndroid &&
+                              typeof DateTimePickerAndroid.open === 'function'
+                            ) {
+                              DateTimePickerAndroid.open({
+                                value: invExpiration ? new Date(invExpiration) : new Date(),
+                                onChange: (event: any, selectedDate?: Date) => {
+                                  // event.type === 'dismissed' when canceled
+                                  if (event?.type === 'set' && selectedDate) {
+                                    setInvExpiration(formatDateToYMD(selectedDate));
+                                  }
+                                },
+                                mode: 'date',
+                              });
+                              return;
+                            }
+                          } catch (err) {
+                            console.warn(
+                              'DatePicker android open failed, falling back to component',
+                              err
+                            );
+                          }
+                        }
+
+                        // iOS / fallback: render component
+                        setShowDatePicker(true);
+                      }}>
+                      <Input placeholder="YYYY‑MM‑DD" value={invExpiration} editable={false} />
+                    </Pressable>
+
+                    {showDatePicker && DateTimePickerComponent ? (
+                      <DateTimePickerComponent
+                        value={invExpiration ? new Date(invExpiration) : new Date()}
+                        mode="date"
+                        display="default"
+                        onChange={(_event: any, selectedDate?: Date) => {
+                          setShowDatePicker(false);
+                          if (selectedDate) setInvExpiration(formatDateToYMD(selectedDate));
+                        }}
+                      />
+                    ) : null}
+                  </>
+                )}
+
+                {inventoryMessage ? (
+                  <Text className="mt-2 text-sm text-destructive">{inventoryMessage}</Text>
+                ) : null}
+
+                <View className="mt-3">
+                  <ScrollView style={{ maxHeight: 220 }}>
+                    <Text variant="code">{JSON.stringify(productData, null, 2)}</Text>
+                  </ScrollView>
+                </View>
               </View>
             </View>
           )}
@@ -505,6 +675,19 @@ export default function DashboardScreen() {
                   if (abortControllerRef.current) abortControllerRef.current.abort();
                 }}>
                 <Text>Cancelar consulta</Text>
+              </Button>
+            ) : null}
+
+            {/* botão para adicionar ao estoque (aparece quando produto for exibido) */}
+            {productData ? (
+              <Button
+                onPress={() => {
+                  if (productLoading || addingToInventory) return;
+                  void handleAddToInventory();
+                }}
+                disabled={addingToInventory}
+                className="mr-2">
+                <Text>{addingToInventory ? 'Adicionando...' : 'Adicionar ao estoque'}</Text>
               </Button>
             ) : null}
 
