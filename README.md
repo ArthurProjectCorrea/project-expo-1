@@ -59,12 +59,26 @@ npm run start
    npm run start
    ```
 
----
+## Variáveis de ambiente (env)
 
-## Tecnologias principais
+Copie `.env.example` para `.env` e defina as chaves necessárias antes de rodar o app em desenvolvimento.
 
-- Expo + Expo Router (navegação baseada em filesystem)
-- React Native (suporte web via expo)
+- `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` — Supabase (autenticação/session).
+- `EXPO_PUBLIC_COSMOS_TOKEN` — Token de acesso ao Cosmos (enviado no cabeçalho `X-Cosmos-Token`).
+- `EXPO_PUBLIC_COSMOS_USER_AGENT` — User-Agent a ser enviado nas requisições ao Cosmos.
+
+Exemplo (.env):
+
+```env
+EXPO_PUBLIC_COSMOS_TOKEN=seu_token_aqui
+EXPO_PUBLIC_COSMOS_USER_AGENT=MinhaApp/1.0
+```
+
+Observações:
+
+- Variáveis com prefixo `EXPO_PUBLIC_` são incluídas no bundle e ficam disponíveis em runtime via `process.env.EXPO_PUBLIC_*`.
+- Nunca comite o arquivo `.env` com tokens sensíveis no repositório.
+
 - TypeScript
 - ESLint + Prettier
 - Lefthook + lint-staged (hooks pre-commit)

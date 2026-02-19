@@ -23,18 +23,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }: { data: { session: any } }) => {
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-      setLoading(false);
-    });
+    let mounted = true;
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event: string, session: any) => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (!mounted) return;
+        setSession(data.session);
+        setUser(data.session?.user ?? null);
+      } catch (err: any) {
+        // handle invalid/expired refresh token gracefully by clearing session/storage
+        console.warn('supabase.getSession error:', err?.message ?? err);
+        const msg = String(err?.message ?? '');
+        if (msg.includes('Refresh Token') || msg.includes('Invalid Refresh Token')) {
+          try {
+            await supabase.auth.signOut();
+          } catch {}
+          setSession(null);
+          setUser(null);
+        }
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event: string, session: any) => {
+      // clear local state when user is signed out or session becomes null
+      if (event === 'SIGNED_OUT' || session == null) {
+        setSession(null);
+        setUser(null);
+        return;
+      }
+
       setSession(session);
       setUser(session?.user ?? null);
     });
 
     return () => {
+      mounted = false;
       listener.subscription.unsubscribe();
     };
   }, []);
